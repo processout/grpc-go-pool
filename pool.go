@@ -104,7 +104,7 @@ func (p *Pool) Close() {
 		if client.ClientConn == nil {
 			continue
 		}
-		client.Close()
+		client.ClientConn.Close()
 	}
 }
 
@@ -140,7 +140,7 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	if wrapper.ClientConn != nil && idleTimeout > 0 &&
 		wrapper.timeUsed.Add(idleTimeout).Before(time.Now()) {
 
-		wrapper.Close()
+		wrapper.ClientConn.Close()
 		wrapper.ClientConn = nil
 	}
 
