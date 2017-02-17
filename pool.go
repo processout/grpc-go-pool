@@ -35,8 +35,9 @@ type Pool struct {
 // ClientConn is the wrapper for a grpc client conn
 type ClientConn struct {
 	*grpc.ClientConn
-	pool     *Pool
-	timeUsed time.Time
+	pool      *Pool
+	timeUsed  time.Time
+	unhealthy bool
 }
 
 // New creates a new clients pool with the given initial amd maximum capacity,
@@ -160,6 +161,12 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	return &wrapper, err
 }
 
+// Unhealhty marks the client conn as unhealthy, so that the connection
+// gets reset when closed
+func (c *ClientConn) Unhealhty() {
+	c.unhealthy = true
+}
+
 // Close returns a ClientConn to the pool. It is safe to call multiple time,
 // but will return an error after first time
 func (c *ClientConn) Close() error {
@@ -179,6 +186,9 @@ func (c *ClientConn) Close() error {
 		pool:       c.pool,
 		ClientConn: c.ClientConn,
 		timeUsed:   time.Now(),
+	}
+	if c.unhealthy {
+		wrapper.ClientConn = nil
 	}
 	select {
 	case c.pool.clients <- wrapper:
