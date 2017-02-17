@@ -100,7 +100,8 @@ func (p *Pool) Close() {
 	}
 
 	close(clients)
-	for client := range clients {
+	for i := 0; i < p.Capacity(); i++ {
+		client := <-clients
 		if client.ClientConn == nil {
 			continue
 		}
@@ -155,6 +156,7 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 			}
 		}
 	}
+
 	return &wrapper, err
 }
 
