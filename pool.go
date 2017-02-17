@@ -160,7 +160,8 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	return &wrapper, err
 }
 
-// Close returns a ClientConn to the pool
+// Close returns a ClientConn to the pool. It is safe to call multiple time,
+// but will return an error after first time
 func (c *ClientConn) Close() error {
 	if c == nil {
 		return nil
@@ -172,7 +173,7 @@ func (c *ClientConn) Close() error {
 		return ErrClosed
 	}
 
-	// We're cloning the wrapper so we can set pool to nil in the one
+	// We're cloning the wrapper so we can set ClientConn to nil in the one
 	// used by the user
 	wrapper := ClientConn{
 		pool:       c.pool,
