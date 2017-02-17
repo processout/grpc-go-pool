@@ -110,14 +110,14 @@ func (p *Pool) Close() {
 	}
 }
 
-// IsClosed returns true if the resource pool is closed.
+// IsClosed returns true if the client pool is closed.
 func (p *Pool) IsClosed() bool {
 	return p == nil || p.getClients() == nil
 }
 
-// Get will return the next available resource. If capacity
+// Get will return the next available client. If capacity
 // has not been reached, it will create a new one using the factory. Otherwise,
-// it will wait till the next resource becomes available or a timeout.
+// it will wait till the next client becomes available or a timeout.
 // A timeout of 0 is an indefinite wait
 func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	clients := p.getClients()
@@ -209,7 +209,7 @@ func (p *Pool) Capacity() int {
 	return cap(p.clients)
 }
 
-// Available returns the number of currently unused resources
+// Available returns the number of currently unused clients
 func (p *Pool) Available() int {
 	if p.IsClosed() {
 		return 0
