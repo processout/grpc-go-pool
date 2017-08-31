@@ -1,6 +1,6 @@
 # grpc-go-pool
 
-[![GoDoc](https://godoc.org/github.com/processout/grpc-go-pool)](https://godoc.org/github.com/processout/grpc-go-pool)
+[![GoDoc](https://godoc.org/github.com/processout/grpc-go-pool?status.svg)](https://godoc.org/github.com/processout/grpc-go-pool)
 
 This package aims to provide an easy to use and lightweight GRPC connection pool. 
 
