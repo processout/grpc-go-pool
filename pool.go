@@ -40,6 +40,25 @@ type ClientConn struct {
 	unhealthy bool
 }
 
+func NewPool(addres string, capacity int) *Pool {
+
+	pool, err := New(func() (*grpc.ClientConn, error) {
+
+		clientConn, err := grpc.Dial(addres, grpc.WithInsecure())
+		if err != nil {
+			// ruokutility.Flog.Error("service err is " + err.Error())
+			return nil, nil
+		}
+		return clientConn, nil
+	}, 1, capacity, 0)
+
+	if err != nil {
+		//ruokutility.Flog.Error("init  client  pool error  is " + err.Error())
+		return nil
+	}
+	return pool
+}
+
 // New creates a new clients pool with the given initial amd maximum capacity,
 // and the timeout for the idle clients. Returns an error if the initial
 // clients could not be created
