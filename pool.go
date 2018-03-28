@@ -161,9 +161,9 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	return &wrapper, err
 }
 
-// Unhealhty marks the client conn as unhealthy, so that the connection
+// Unhealthy marks the client conn as unhealthy, so that the connection
 // gets reset when closed
-func (c *ClientConn) Unhealhty() {
+func (c *ClientConn) Unhealthy() {
 	c.unhealthy = true
 }
 
