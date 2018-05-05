@@ -188,6 +188,7 @@ func (c *ClientConn) Close() error {
 		timeUsed:   time.Now(),
 	}
 	if c.unhealthy {
+		wrapper.ClientConn.Close()
 		wrapper.ClientConn = nil
 	}
 	select {
