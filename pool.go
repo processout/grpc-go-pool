@@ -105,7 +105,7 @@ func (p *Pool) Close() {
 		if client.ClientConn == nil {
 			continue
 		}
-		_ = client.ClientConn.Close()
+		client.ClientConn.Close()
 	}
 }
 
@@ -147,12 +147,12 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	if wrapper.ClientConn != nil && idleTimeout > 0 &&
 		wrapper.timeUsed.Add(idleTimeout).Before(time.Now()) {
 
-		_ = wrapper.ClientConn.Close()
+		wrapper.ClientConn.Close()
 		wrapper.ClientConn = nil
 	}
 
+	var err error
 	if wrapper.ClientConn == nil {
-		var err error
 		wrapper.ClientConn, err = p.factory()
 		if err != nil {
 			// If there was an error, we want to put back a placeholder
@@ -160,14 +160,13 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 			p.clients <- ClientConn{
 				pool: p,
 			}
-			return nil, err
 		}
 	}
 
-	return &wrapper, nil
+	return &wrapper, err
 }
 
-func (p *Pool) put(c *grpc.ClientConn) error {
+func (p *Pool) put(wrapper *ClientConn) error {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -175,16 +174,8 @@ func (p *Pool) put(c *grpc.ClientConn) error {
 		return ErrClosed
 	}
 
-	// We're cloning the wrapper so we can set ClientConn to nil in the one
-	// used by the user
-	wrapper := ClientConn{
-		pool:       p,
-		ClientConn: c,
-		timeUsed:   time.Now(),
-	}
-
 	select {
-	case p.clients <- wrapper:
+	case p.clients <- *wrapper:
 		// All good
 	default:
 		return ErrFullPool
@@ -215,11 +206,19 @@ func (c *ClientConn) Close() error {
 	}
 
 	if c.unhealthy {
-		_ = c.ClientConn.Close()
+		c.ClientConn.Close()
 		c.ClientConn = nil
 	}
 
-	err := c.pool.put(c.ClientConn)
+	// We're cloning the wrapper so we can set ClientConn to nil in the one
+	// used by the user
+	wrapper := ClientConn{
+		pool:       c.pool,
+		ClientConn: c.ClientConn,
+		timeUsed:   time.Now(),
+	}
+
+	err := c.pool.put(&wrapper)
 	if err != nil {
 		return err
 	}

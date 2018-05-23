@@ -117,3 +117,33 @@ func TestTimeout(t *testing.T) {
 		t.Errorf("Expected error \"%s\" but got \"%s\"", ErrTimeout, err2.Error())
 	}
 }
+
+func f(p *Pool, t *testing.T) {
+	for {
+		c, err := p.Get(context.Background())
+		if err != nil {
+			if err != ErrClosed {
+				t.Errorf("Expected error \"%s\" but got \"%s\"", ErrClosed, err.Error())
+			}
+			return
+		}
+		c.Close()
+	}
+}
+
+func TestConcurrent(t *testing.T) {
+	concurrentCount := 10
+	p, err := New(func() (*grpc.ClientConn, error) {
+		return &grpc.ClientConn{}, nil
+	}, concurrentCount, concurrentCount, 0)
+	if err != nil {
+		t.Errorf("The pool returned an error: %s", err.Error())
+		return
+	}
+	for i := 0; i < concurrentCount; i++ {
+		go f(p, t)
+	}
+	time.Sleep(time.Second * 1)
+	p.Close()
+	time.Sleep(time.Second * 1)
+}
