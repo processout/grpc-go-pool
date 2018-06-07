@@ -26,24 +26,28 @@ type Factory func() (*grpc.ClientConn, error)
 
 // Pool is the grpc client pool
 type Pool struct {
-	clients     chan ClientConn
-	factory     Factory
-	idleTimeout time.Duration
-	mu          sync.RWMutex
+	clients         chan ClientConn
+	factory         Factory
+	idleTimeout     time.Duration
+	maxLifeDuration time.Duration
+	mu              sync.RWMutex
 }
 
 // ClientConn is the wrapper for a grpc client conn
 type ClientConn struct {
 	*grpc.ClientConn
-	pool      *Pool
-	timeUsed  time.Time
-	unhealthy bool
+	pool          *Pool
+	timeUsed      time.Time
+	timeInitiated time.Time
+	unhealthy     bool
 }
 
 // New creates a new clients pool with the given initial amd maximum capacity,
 // and the timeout for the idle clients. Returns an error if the initial
 // clients could not be created
-func New(factory Factory, init, capacity int, idleTimeout time.Duration) (*Pool, error) {
+func New(factory Factory, init, capacity int, idleTimeout time.Duration,
+	maxLifeDuration ...time.Duration) (*Pool, error) {
+
 	if capacity <= 0 {
 		capacity = 1
 	}
@@ -58,6 +62,9 @@ func New(factory Factory, init, capacity int, idleTimeout time.Duration) (*Pool,
 		factory:     factory,
 		idleTimeout: idleTimeout,
 	}
+	if len(maxLifeDuration) > 0 {
+		p.maxLifeDuration = maxLifeDuration[0]
+	}
 	for i := 0; i < init; i++ {
 		c, err := factory()
 		if err != nil {
@@ -65,9 +72,10 @@ func New(factory Factory, init, capacity int, idleTimeout time.Duration) (*Pool,
 		}
 
 		p.clients <- ClientConn{
-			ClientConn: c,
-			pool:       p,
-			timeUsed:   time.Now(),
+			ClientConn:    c,
+			pool:          p,
+			timeUsed:      time.Now(),
+			timeInitiated: time.Now(),
 		}
 	}
 	// Fill the rest of the pool with empty clients
@@ -135,9 +143,9 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 		return nil, ErrTimeout
 	}
 
-	// If the wrapper is old, close the connection and create a new one. It's
-	// safe to assume that there isn't any newer client as the client we fetched
-	// is the first in the channel
+	// If the wrapper was idle too long, close the connection and create a new
+	// one. It's safe to assume that there isn't any newer client as the client
+	// we fetched is the first in the channel
 	idleTimeout := p.idleTimeout
 	if wrapper.ClientConn != nil && idleTimeout > 0 &&
 		wrapper.timeUsed.Add(idleTimeout).Before(time.Now()) {
@@ -156,6 +164,8 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 				pool: p,
 			}
 		}
+		// This is a new connection, reset its initiated time
+		wrapper.timeInitiated = time.Now()
 	}
 
 	return &wrapper, err
@@ -178,6 +188,11 @@ func (c *ClientConn) Close() error {
 	}
 	if c.pool.IsClosed() {
 		return ErrClosed
+	}
+	// If the wrapper connection has become too old, we want to recycle it
+	maxDuration := c.pool.maxLifeDuration
+	if maxDuration > 0 && c.timeInitiated.Add(maxDuration).Before(time.Now()) {
+		c.Unhealthy()
 	}
 
 	// We're cloning the wrapper so we can set ClientConn to nil in the one
