@@ -117,3 +117,26 @@ func TestTimeout(t *testing.T) {
 		t.Errorf("Expected error \"%s\" but got \"%s\"", ErrTimeout, err2.Error())
 	}
 }
+
+func TestMaxLifeDuration(t *testing.T) {
+	p, err := New(func() (*grpc.ClientConn, error) {
+		return &grpc.ClientConn{}, nil
+	}, 1, 1, 0, 1)
+	if err != nil {
+		t.Errorf("The pool returned an error: %s", err.Error())
+	}
+
+	c, err := p.Get(context.Background())
+	if err != nil {
+		t.Errorf("Get returned an error: %s", err.Error())
+	}
+
+	// The max life of the connection was very low (1ns), so when we close
+	// the connection it should get marked as unhealthy
+	if err := c.Close(); err != nil {
+		t.Errorf("Close returned an error: %s", err.Error())
+	}
+	if !c.unhealthy {
+		t.Errorf("the connection should've been marked as unhealthy")
+	}
+}
