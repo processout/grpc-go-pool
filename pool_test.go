@@ -10,7 +10,7 @@ import (
 
 func TestNew(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return &grpc.ClientConn{}, nil
+		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 3, 0)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -94,7 +94,7 @@ func TestNew(t *testing.T) {
 
 func TestTimeout(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return &grpc.ClientConn{}, nil
+		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 1, 0)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -120,7 +120,7 @@ func TestTimeout(t *testing.T) {
 
 func TestMaxLifeDuration(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return &grpc.ClientConn{}, nil
+		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 1, 0, 1)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
