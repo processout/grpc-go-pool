@@ -118,6 +118,35 @@ func TestTimeout(t *testing.T) {
 	}
 }
 
+func TestIdleTimeout(t *testing.T) {
+	var connCreated = 0
+	p, err := New(func() (*grpc.ClientConn, error) {
+		connCreated++
+		return grpc.Dial("example.com", grpc.WithInsecure())
+	}, 1, 1, 2*time.Second)
+	if err != nil {
+		t.Errorf("The pool returned an error: %s", err.Error())
+	}
+
+	c1, err := p.Get(context.Background())
+	if err != nil {
+		t.Errorf("Get returned an error: %s", err.Error())
+	}
+
+	if connCreated != 1 {
+		t.Errorf("Connection created count was %d, but expected 1", connCreated)
+	}
+
+	c1.Close()
+	time.Sleep(1 * time.Second)
+
+	p.Get(context.Background())
+
+	if connCreated != 2 {
+		t.Errorf("Connection created count was %d, but expected 2", connCreated)
+	}
+}
+
 func TestMaxLifeDuration(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
 		return grpc.Dial("example.com", grpc.WithInsecure())

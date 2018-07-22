@@ -148,7 +148,7 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	// we fetched is the first in the channel
 	idleTimeout := p.idleTimeout
 	if wrapper.ClientConn != nil && idleTimeout > 0 &&
-		wrapper.timeUsed.Add(idleTimeout).Before(time.Now()) {
+		time.Now().After(wrapper.timeUsed.Add(idleTimeout)) {
 
 		wrapper.ClientConn.Close()
 		wrapper.ClientConn = nil
@@ -189,14 +189,10 @@ func (c *ClientConn) Close() error {
 	if c.pool.IsClosed() {
 		return ErrClosed
 	}
-	// If the wrapper connection has become too old, we want to recycle it. To
-	// clarify the logic: if the sum of the initialization time and the max
-	// duration is before Now(), it means the initialization is so old adding
-	// the maximum duration couldn't put in the future. This sum therefore
-	// corresponds to the cut-off point: if it's in the future we still have
-	// time, if it's in the past it's too old
+
 	maxDuration := c.pool.maxLifeDuration
-	if maxDuration > 0 && c.timeInitiated.Add(maxDuration).Before(time.Now()) {
+
+	if maxDuration > 0 && time.Now().After(c.timeInitiated.Add(maxDuration)) {
 		c.Unhealthy()
 	}
 
