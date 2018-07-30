@@ -190,8 +190,13 @@ func (c *ClientConn) Close() error {
 		return ErrClosed
 	}
 
+	// If the wrapper connection has become too old, we want to recycle it. To
+	// clarify the logic: if the sum of the initialization time and the max
+	// duration is before Now(), it means the initialization is so old adding
+	// the maximum duration couldn't put in the future. This sum therefore
+	// corresponds to the cut-off point: if it's in the future we still have
+	// time, if it's in the past it's too old
 	maxDuration := c.pool.maxLifeDuration
-
 	if maxDuration > 0 && time.Now().After(c.timeInitiated.Add(maxDuration)) {
 		c.Unhealthy()
 	}
