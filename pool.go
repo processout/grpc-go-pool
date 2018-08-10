@@ -210,6 +210,8 @@ func (c *ClientConn) Close() error {
 	if c.unhealthy {
 		wrapper.ClientConn.Close()
 		wrapper.ClientConn = nil
+	} else {
+		wrapper.timeInitiated = c.timeInitiated
 	}
 	select {
 	case c.pool.clients <- wrapper:
