@@ -141,24 +141,34 @@ func TestMaxLifeDuration(t *testing.T) {
 	}
 
 	// Let's also make sure we don't prematurely close the connection
+	count := 0
 	p, err = New(func() (*grpc.ClientConn, error) {
+		count++
 		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 1, 0, time.Minute)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
 	}
 
-	c, err = p.Get(context.Background())
-	if err != nil {
-		t.Errorf("Get returned an error: %s", err.Error())
+	for i := 0; i < 3; i++ {
+		c, err = p.Get(context.Background())
+		if err != nil {
+			t.Errorf("Get returned an error: %s", err.Error())
+		}
+
+		// The max life of the connection is high, so when we close
+		// the connection it shouldn't be marked as unhealthy
+		if err := c.Close(); err != nil {
+			t.Errorf("Close returned an error: %s", err.Error())
+		}
+		if c.unhealthy {
+			t.Errorf("the connection shouldn't have been marked as unhealthy")
+		}
 	}
 
-	// The max life of the connection was very low (1ns), so when we close
-	// the connection it should get marked as unhealthy
-	if err := c.Close(); err != nil {
-		t.Errorf("Close returned an error: %s", err.Error())
+	// Count should have been 1 as dial function should only have been called once
+	if count > 1 {
+		t.Errorf("Dial function has been called multiple times")
 	}
-	if c.unhealthy {
-		t.Errorf("the connection shouldn't have been marked as unhealthy")
-	}
+
 }
