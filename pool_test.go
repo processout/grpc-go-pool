@@ -166,7 +166,7 @@ func TestMaxLifeDuration(t *testing.T) {
 		}
 	}
 
-	//Count should have been 1 as dial function should only have been called once
+	// Count should have been 1 as dial function should only have been called once
 	if count > 1 {
 		t.Errorf("Dial function has been called multiple times")
 	}
