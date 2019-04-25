@@ -6,11 +6,44 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	pb "google.golang.org/grpc/examples/helloworld/helloworld"
+	"net"
+	"google.golang.org/grpc/reflection"
+	"fmt"
 )
 
+
+type server struct{}
+
+func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloReply, error) {
+	return &pb.HelloReply{Message: "Hello " + in.Name}, nil
+}
+
+func startHWServer(t *testing.T) (*grpc.Server, string) {
+	lis, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	s := grpc.NewServer()
+	pb.RegisterGreeterServer(s, &server{})
+	reflection.Register(s)
+
+	go func() {
+		if err := s.Serve(lis); err != nil {
+			t.Fatalf("failed to serve: %v", err)
+		}
+	}()
+
+	return s, lis.Addr().String()
+}
+
 func TestNew(t *testing.T) {
+
+	s, addr := startHWServer(t)
+	defer s.GracefulStop()
+
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.Dial("example.com", grpc.WithInsecure())
+		return grpc.Dial(addr, grpc.WithInsecure())
 	}, 1, 3, 0)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -25,7 +58,7 @@ func TestNew(t *testing.T) {
 	// Get a client
 	client, err := p.Get(context.Background())
 	if err != nil {
-		t.Errorf("Get returned an error: %s", err.Error())
+		t.Errorf("Get returned an error: %s;", err.Error())
 	}
 	if client == nil {
 		t.Error("client was nil")
@@ -36,6 +69,8 @@ func TestNew(t *testing.T) {
 	if a := p.Capacity(); a != 3 {
 		t.Errorf("The pool capacity was %d but should be 3", a)
 	}
+
+	testHelloworld(t, client)
 
 	// Return the client
 	err = client.Close()
@@ -93,8 +128,12 @@ func TestNew(t *testing.T) {
 }
 
 func TestTimeout(t *testing.T) {
+
+	s, addr := startHWServer(t)
+	defer s.GracefulStop()
+
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.Dial("example.com", grpc.WithInsecure())
+		return grpc.Dial(addr, grpc.WithInsecure())
 	}, 1, 1, 0)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -119,8 +158,12 @@ func TestTimeout(t *testing.T) {
 }
 
 func TestMaxLifeDuration(t *testing.T) {
+
+	s, addr := startHWServer(t)
+	defer s.GracefulStop()
+
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.Dial("example.com", grpc.WithInsecure())
+		return grpc.Dial(addr, grpc.WithInsecure())
 	}, 1, 1, 0, 1)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -171,4 +214,20 @@ func TestMaxLifeDuration(t *testing.T) {
 		t.Errorf("Dial function has been called multiple times")
 	}
 
+}
+
+func testHelloworld(t *testing.T, conn *ClientConn) bool {
+	name := "test"
+	client := pb.NewGreeterClient(conn.ClientConn)
+	r, err := client.SayHello(context.Background(), &pb.HelloRequest{Name: name})
+	if err != nil {
+		t.Fatal(err)
+		return false
+	}
+	expected := fmt.Sprintf("Hello %s", name)
+	if r.Message != expected {
+		t.Fatalf("server reply is \"%s\", expected \"%s\".", r.Message, expected)
+		return false
+	}
+	return true
 }
