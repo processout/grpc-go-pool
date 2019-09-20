@@ -42,7 +42,7 @@ type ClientConn struct {
 	unhealthy     bool
 }
 
-// New creates a new clients pool with the given initial amd maximum capacity,
+// New creates a new clients pool with the given initial and maximum capacity,
 // and the timeout for the idle clients. Returns an error if the initial
 // clients could not be created
 func New(factory Factory, init, capacity int, idleTimeout time.Duration,
