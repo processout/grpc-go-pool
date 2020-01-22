@@ -98,7 +98,8 @@ func (p *Pool) getClients() chan ClientConn {
 
 // Close empties the pool calling Close on all its clients.
 // You can call Close while there are outstanding clients.
-// It waits for `duration` time for all clients to be returned and close them.
+// It waits for `wait` duration for all clients to be returned and close them.
+// Otherwise error will be returned if not all connections can be collected and properly closed.
 // The pool channel is then closed, and Get will not be allowed anymore
 func (p *Pool) Close(wait time.Duration) error {
 	cap := p.Capacity()
