@@ -19,6 +19,8 @@ var (
 	ErrAlreadyClosed = errors.New("grpc pool: the connection was already closed")
 	// ErrFullPool is the error when the pool is already full
 	ErrFullPool = errors.New("grpc pool: closing a ClientConn into a full pool")
+	// ErrConnectionLeaked is the error when connections are not properly closed on pool shutdown
+	ErrConnectionLeaked = errors.New("grpc pool: connection leaked on pool closing")
 )
 
 // Factory is a function type creating a grpc client
@@ -97,14 +99,16 @@ func (p *Pool) getClients() chan ClientConn {
 // Close empties the pool calling Close on all its clients.
 // You can call Close while there are outstanding clients.
 // The pool channel is then closed, and Get will not be allowed anymore
-func (p *Pool) Close() {
+func (p *Pool) Close(wait time.Duration) error {
+	cap := p.Capacity()
+
 	p.mu.Lock()
 	clients := p.clients
 	p.clients = nil
 	p.mu.Unlock()
 
 	if clients == nil {
-		return
+		return nil
 	}
 
 	close(clients)
@@ -112,8 +116,9 @@ func (p *Pool) Close() {
 		if client.ClientConn == nil {
 			continue
 		}
-		client.ClientConn.Close()
 	}
+
+	return nil
 }
 
 // IsClosed returns true if the client pool is closed.
