@@ -97,14 +97,14 @@ func (p *Pool) getClients() chan ClientConn {
 // Close empties the pool calling Close on all its clients.
 // You can call Close while there are outstanding clients.
 // The pool channel is then closed, and Get will not be allowed anymore
-func (p *Pool) Close() {
+func (p *Pool) Close() error {
 	p.mu.Lock()
 	clients := p.clients
 	p.clients = nil
 	p.mu.Unlock()
 
 	if clients == nil {
-		return
+		return nil
 	}
 
 	close(clients)
@@ -112,8 +112,10 @@ func (p *Pool) Close() {
 		if client.ClientConn == nil {
 			continue
 		}
-		client.ClientConn.Close()
+		return client.ClientConn.Close()
 	}
+
+	return nil
 }
 
 // IsClosed returns true if the client pool is closed.

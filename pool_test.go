@@ -196,6 +196,6 @@ func TestPoolClose(t *testing.T) {
 	p.Close()
 
 	if cc.GetState() != connectivity.Shutdown {
-		t.Errorf("Returned connection was not closed")
+		t.Errorf("Returned connection was not closed, underlying connection is not in shutdown state")
 	}
 }
