@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
 
 func TestNew(t *testing.T) {
@@ -171,4 +172,30 @@ func TestMaxLifeDuration(t *testing.T) {
 		t.Errorf("Dial function has been called multiple times")
 	}
 
+}
+
+func TestPoolClose(t *testing.T) {
+	p, err := New(func() (*grpc.ClientConn, error) {
+		return grpc.Dial("example.com", grpc.WithInsecure())
+	}, 1, 1, 0)
+	if err != nil {
+		t.Errorf("The pool returned an error: %s", err.Error())
+	}
+
+	c, err := p.Get(context.Background())
+	if err != nil {
+		t.Errorf("Get returned an error: %s", err.Error())
+	}
+
+	cc := c.ClientConn
+	if err := c.Close(); err != nil {
+		t.Errorf("Close returned an error: %s", err.Error())
+	}
+
+	// Close pool should close all underlying gRPC client connections
+	p.Close()
+
+	if cc.GetState() != connectivity.Shutdown {
+		t.Errorf("Returned connection was not closed, underlying connection is not in shutdown state")
+	}
 }
