@@ -10,7 +10,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	p, err := New(func() (*grpc.ClientConn, error) {
+	p, err := New(func(context.Context) (*grpc.ClientConn, error) {
 		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 3, 0)
 	if err != nil {
@@ -94,7 +94,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestTimeout(t *testing.T) {
-	p, err := New(func() (*grpc.ClientConn, error) {
+	p, err := New(func(context.Context) (*grpc.ClientConn, error) {
 		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 1, 0)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestTimeout(t *testing.T) {
 }
 
 func TestMaxLifeDuration(t *testing.T) {
-	p, err := New(func() (*grpc.ClientConn, error) {
+	p, err := New(func(context.Context) (*grpc.ClientConn, error) {
 		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 1, 0, 1)
 	if err != nil {
@@ -143,7 +143,7 @@ func TestMaxLifeDuration(t *testing.T) {
 
 	// Let's also make sure we don't prematurely close the connection
 	count := 0
-	p, err = New(func() (*grpc.ClientConn, error) {
+	p, err = New(func(context.Context) (*grpc.ClientConn, error) {
 		count++
 		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 1, 0, time.Minute)
@@ -175,7 +175,7 @@ func TestMaxLifeDuration(t *testing.T) {
 }
 
 func TestPoolClose(t *testing.T) {
-	p, err := New(func() (*grpc.ClientConn, error) {
+	p, err := New(func(context.Context) (*grpc.ClientConn, error) {
 		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 1, 0)
 	if err != nil {

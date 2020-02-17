@@ -22,7 +22,7 @@ var (
 )
 
 // Factory is a function type creating a grpc client
-type Factory func() (*grpc.ClientConn, error)
+type Factory func(context.Context) (*grpc.ClientConn, error)
 
 // Pool is the grpc client pool
 type Pool struct {
@@ -47,6 +47,14 @@ type ClientConn struct {
 // clients could not be created
 func New(factory Factory, init, capacity int, idleTimeout time.Duration,
 	maxLifeDuration ...time.Duration) (*Pool, error) {
+	return NewWithContext(context.Background(), factory, init, capacity, idleTimeout, maxLifeDuration...)
+}
+
+// New creates a new clients pool with the given initial and maximum capacity,
+// and the timeout for the idle clients. Returns an error if the initial
+// clients could not be created
+func NewWithContext(ctx context.Context, factory Factory, init, capacity int, idleTimeout time.Duration,
+	maxLifeDuration ...time.Duration) (*Pool, error) {
 
 	if capacity <= 0 {
 		capacity = 1
@@ -66,7 +74,7 @@ func New(factory Factory, init, capacity int, idleTimeout time.Duration,
 		p.maxLifeDuration = maxLifeDuration[0]
 	}
 	for i := 0; i < init; i++ {
-		c, err := factory()
+		c, err := factory(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -154,7 +162,7 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 
 	var err error
 	if wrapper.ClientConn == nil {
-		wrapper.ClientConn, err = p.factory()
+		wrapper.ClientConn, err = p.factory(ctx)
 		if err != nil {
 			// If there was an error, we want to put back a placeholder
 			// client in the channel
