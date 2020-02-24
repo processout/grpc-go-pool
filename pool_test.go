@@ -219,7 +219,7 @@ func TestContextCancelation(t *testing.T) {
 		t.Errorf("Returned error was not context.Canceled, but the context did cancel before the invocation")
 	}
 }
-func TestContextTimout(t *testing.T) {
+func TestContextTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Microsecond)
 	defer cancel()
 
@@ -240,7 +240,7 @@ func TestContextTimout(t *testing.T) {
 	}
 }
 
-func TestGetContextTimout(t *testing.T) {
+func TestGetContextTimeout(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
 		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 1, 0)
@@ -263,7 +263,7 @@ func TestGetContextTimout(t *testing.T) {
 	}
 }
 
-func TestGetContextFactoryTimout(t *testing.T) {
+func TestGetContextFactoryTimeout(t *testing.T) {
 	p, err := NewWithContext(context.TODO(), func(ctx context.Context) (*grpc.ClientConn, error) {
 		select {
 		case <-ctx.Done():
