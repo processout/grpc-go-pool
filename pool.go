@@ -22,12 +22,17 @@ var (
 )
 
 // Factory is a function type creating a grpc client
-type Factory func(context.Context) (*grpc.ClientConn, error)
+type Factory func() (*grpc.ClientConn, error)
+
+// FactoryWithContext is a function type creating a grpc client
+// that accepts the context parameter that could be passed from
+// Get or NewWithContext method.
+type FactoryWithContext func(context.Context) (*grpc.ClientConn, error)
 
 // Pool is the grpc client pool
 type Pool struct {
 	clients         chan ClientConn
-	factory         Factory
+	factory         FactoryWithContext
 	idleTimeout     time.Duration
 	maxLifeDuration time.Duration
 	mu              sync.RWMutex
@@ -47,13 +52,15 @@ type ClientConn struct {
 // clients could not be created
 func New(factory Factory, init, capacity int, idleTimeout time.Duration,
 	maxLifeDuration ...time.Duration) (*Pool, error) {
-	return NewWithContext(context.Background(), factory, init, capacity, idleTimeout, maxLifeDuration...)
+	return NewWithContext(context.TODO(), func(ctx context.Context) (*grpc.ClientConn, error) { return factory() },
+		init, capacity, idleTimeout, maxLifeDuration...)
 }
 
-// New creates a new clients pool with the given initial and maximum capacity,
-// and the timeout for the idle clients. Returns an error if the initial
-// clients could not be created
-func NewWithContext(ctx context.Context, factory Factory, init, capacity int, idleTimeout time.Duration,
+// NewWithContext creates a new clients pool with the given initial and maximum
+// capacity, and the timeout for the idle clients. The context parameter would
+// be passed to the factory method during initialization. Returns an error if the
+// initial clients could not be created.
+func NewWithContext(ctx context.Context, factory FactoryWithContext, init, capacity int, idleTimeout time.Duration,
 	maxLifeDuration ...time.Duration) (*Pool, error) {
 
 	if capacity <= 0 {
@@ -146,7 +153,7 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	case wrapper = <-clients:
 		// All good
 	case <-ctx.Done():
-		return nil, ErrTimeout
+		return nil, ErrTimeout // it would better returns ctx.Err()
 	}
 
 	// If the wrapper was idle too long, close the connection and create a new
