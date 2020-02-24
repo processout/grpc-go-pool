@@ -241,6 +241,29 @@ func TestContextTimout(t *testing.T) {
 }
 
 func TestGetContextTimout(t *testing.T) {
+	p, err := New(func() (*grpc.ClientConn, error) {
+		return grpc.Dial("example.com", grpc.WithInsecure())
+	}, 1, 1, 0)
+
+	if err != nil {
+		t.Errorf("The pool returned an error: %s", err.Error())
+	}
+
+	// keep busy the available conn
+	_, _ = p.Get(context.TODO())
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Microsecond)
+	defer cancel()
+
+	// wait for the deadline to pass
+	time.Sleep(time.Millisecond)
+	_, err = p.Get(ctx)
+	if err != ErrTimeout { // it should be context.DeadlineExceeded
+		t.Errorf("Returned error was not ErrTimeout, but the context was timed out before the Get invocation")
+	}
+}
+
+func TestGetContextFactoryTimout(t *testing.T) {
 	p, err := NewWithContext(context.TODO(), func(ctx context.Context) (*grpc.ClientConn, error) {
 		select {
 		case <-ctx.Done():
@@ -257,14 +280,19 @@ func TestGetContextTimout(t *testing.T) {
 		t.Errorf("The pool returned an error: %s", err.Error())
 	}
 
-	// keep busy the available conn
-	_, _ = p.Get(context.TODO())
+	// mark as unhealty the available conn
+	c, err := p.Get(context.TODO())
+	if err != nil {
+		t.Errorf("Get returned an error: %s", err.Error())
+	}
+	c.Unhealthy()
+	c.Close()
 
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Microsecond)
 	defer cancel()
 
 	_, err = p.Get(ctx)
-	if err != ErrTimeout { // it should be context.DeadlineExceeded
-		t.Errorf("Returned error was not ErrTimeout, but the context was timed out before the Get invocation")
+	if err != context.DeadlineExceeded {
+		t.Errorf("Returned error was not context.DeadlineExceeded, but the context was timed out before the Get invocation")
 	}
 }
