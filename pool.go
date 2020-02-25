@@ -52,7 +52,7 @@ type ClientConn struct {
 // clients could not be created
 func New(factory Factory, init, capacity int, idleTimeout time.Duration,
 	maxLifeDuration ...time.Duration) (*Pool, error) {
-	return NewWithContext(context.TODO(), func(ctx context.Context) (*grpc.ClientConn, error) { return factory() },
+	return NewWithContext(context.Background(), func(ctx context.Context) (*grpc.ClientConn, error) { return factory() },
 		init, capacity, idleTimeout, maxLifeDuration...)
 }
 

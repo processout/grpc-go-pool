@@ -201,7 +201,7 @@ func TestPoolClose(t *testing.T) {
 }
 
 func TestContextCancelation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.TODO())
+	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	_, err := NewWithContext(ctx, func(ctx context.Context) (*grpc.ClientConn, error) {
@@ -220,7 +220,7 @@ func TestContextCancelation(t *testing.T) {
 	}
 }
 func TestContextTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Microsecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
 	defer cancel()
 
 	_, err := NewWithContext(ctx, func(ctx context.Context) (*grpc.ClientConn, error) {
@@ -250,9 +250,9 @@ func TestGetContextTimeout(t *testing.T) {
 	}
 
 	// keep busy the available conn
-	_, _ = p.Get(context.TODO())
+	_, _ = p.Get(context.Background())
 
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Microsecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
 	defer cancel()
 
 	// wait for the deadline to pass
@@ -264,7 +264,7 @@ func TestGetContextTimeout(t *testing.T) {
 }
 
 func TestGetContextFactoryTimeout(t *testing.T) {
-	p, err := NewWithContext(context.TODO(), func(ctx context.Context) (*grpc.ClientConn, error) {
+	p, err := NewWithContext(context.Background(), func(ctx context.Context) (*grpc.ClientConn, error) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -281,14 +281,14 @@ func TestGetContextFactoryTimeout(t *testing.T) {
 	}
 
 	// mark as unhealty the available conn
-	c, err := p.Get(context.TODO())
+	c, err := p.Get(context.Background())
 	if err != nil {
 		t.Errorf("Get returned an error: %s", err.Error())
 	}
 	c.Unhealthy()
 	c.Close()
 
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Microsecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
 	defer cancel()
 
 	_, err = p.Get(ctx)
