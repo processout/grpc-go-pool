@@ -24,10 +24,15 @@ var (
 // Factory is a function type creating a grpc client
 type Factory func() (*grpc.ClientConn, error)
 
+// FactoryWithContext is a function type creating a grpc client
+// that accepts the context parameter that could be passed from
+// Get or NewWithContext method.
+type FactoryWithContext func(context.Context) (*grpc.ClientConn, error)
+
 // Pool is the grpc client pool
 type Pool struct {
 	clients         chan ClientConn
-	factory         Factory
+	factory         FactoryWithContext
 	idleTimeout     time.Duration
 	maxLifeDuration time.Duration
 	mu              sync.RWMutex
@@ -46,6 +51,16 @@ type ClientConn struct {
 // and the timeout for the idle clients. Returns an error if the initial
 // clients could not be created
 func New(factory Factory, init, capacity int, idleTimeout time.Duration,
+	maxLifeDuration ...time.Duration) (*Pool, error) {
+	return NewWithContext(context.Background(), func(ctx context.Context) (*grpc.ClientConn, error) { return factory() },
+		init, capacity, idleTimeout, maxLifeDuration...)
+}
+
+// NewWithContext creates a new clients pool with the given initial and maximum
+// capacity, and the timeout for the idle clients. The context parameter would
+// be passed to the factory method during initialization. Returns an error if the
+// initial clients could not be created.
+func NewWithContext(ctx context.Context, factory FactoryWithContext, init, capacity int, idleTimeout time.Duration,
 	maxLifeDuration ...time.Duration) (*Pool, error) {
 
 	if capacity <= 0 {
@@ -66,7 +81,7 @@ func New(factory Factory, init, capacity int, idleTimeout time.Duration,
 		p.maxLifeDuration = maxLifeDuration[0]
 	}
 	for i := 0; i < init; i++ {
-		c, err := factory()
+		c, err := factory(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +153,7 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	case wrapper = <-clients:
 		// All good
 	case <-ctx.Done():
-		return nil, ErrTimeout
+		return nil, ErrTimeout // it would better returns ctx.Err()
 	}
 
 	// If the wrapper was idle too long, close the connection and create a new
@@ -154,7 +169,7 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 
 	var err error
 	if wrapper.ClientConn == nil {
-		wrapper.ClientConn, err = p.factory()
+		wrapper.ClientConn, err = p.factory(ctx)
 		if err != nil {
 			// If there was an error, we want to put back a placeholder
 			// client in the channel
