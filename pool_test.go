@@ -31,8 +31,8 @@ func TestNew(t *testing.T) {
 	if client == nil {
 		t.Error("client was nil")
 	}
-	if a := p.Available(); a != 2 {
-		t.Errorf("The pool available was %d but should be 2", a)
+	if a := p.Available(); a != 3 {
+		t.Errorf("The pool available was %d but should be 3", a)
 	}
 	if a := p.Capacity(); a != 3 {
 		t.Errorf("The pool capacity was %d but should be 3", a)
@@ -71,8 +71,8 @@ func TestNew(t *testing.T) {
 		t.Errorf("Err3 was not nil: %s", err3.Error())
 	}
 
-	if a := p.Available(); a != 0 {
-		t.Errorf("The pool available was %d but should be 0", a)
+	if a := p.Available(); a != 3 {
+		t.Errorf("The pool available was %d but should be 3", a)
 	}
 	if a := p.Capacity(); a != 3 {
 		t.Errorf("The pool capacity was %d but should be 3", a)
@@ -90,32 +90,6 @@ func TestNew(t *testing.T) {
 	err3 = cl3.Close()
 	if err3 != nil {
 		t.Errorf("Close returned an error: %s", err3.Error())
-	}
-}
-
-func TestTimeout(t *testing.T) {
-	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.Dial("example.com", grpc.WithInsecure())
-	}, 1, 1, 0)
-	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
-	}
-
-	_, err = p.Get(context.Background())
-	if err != nil {
-		t.Errorf("Get returned an error: %s", err.Error())
-	}
-	if a := p.Available(); a != 0 {
-		t.Errorf("The pool available was %d but expected 0", a)
-	}
-
-	// We want to fetch a second one, with a timeout. If the timeout was
-	// ommitted, the pool would wait indefinitely as it'd wait for another
-	// client to get back into the queue
-	ctx, _ := context.WithDeadline(context.Background(), time.Now().Add(10*time.Millisecond))
-	_, err2 := p.Get(ctx)
-	if err2 != ErrTimeout {
-		t.Errorf("Expected error \"%s\" but got \"%s\"", ErrTimeout, err2.Error())
 	}
 }
 
@@ -240,59 +214,42 @@ func TestContextTimeout(t *testing.T) {
 	}
 }
 
-func TestGetContextTimeout(t *testing.T) {
-	p, err := New(func() (*grpc.ClientConn, error) {
+func TestConcurrencyCounter(t *testing.T) {
+	p, _ := New(func() (*grpc.ClientConn, error) {
 		return grpc.Dial("example.com", grpc.WithInsecure())
 	}, 1, 1, 0)
+	client, _ := p.Get(context.Background())
 
-	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
+	if client.Concurrency() != 1 {
+		t.Errorf("The connection is not tracking concurrency - got %d expected 1", client.Concurrency())
 	}
 
-	// keep busy the available conn
-	_, _ = p.Get(context.Background())
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
-	defer cancel()
-
-	// wait for the deadline to pass
-	time.Sleep(time.Millisecond)
-	_, err = p.Get(ctx)
-	if err != ErrTimeout { // it should be context.DeadlineExceeded
-		t.Errorf("Returned error was not ErrTimeout, but the context was timed out before the Get invocation")
-	}
-}
-
-func TestGetContextFactoryTimeout(t *testing.T) {
-	p, err := NewWithContext(context.Background(), func(ctx context.Context) (*grpc.ClientConn, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-
-		// wait for the deadline to pass
-		case <-time.After(time.Millisecond):
-			return grpc.Dial("example.com", grpc.WithInsecure())
-		}
-
-	}, 1, 1, 0)
-
-	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
+	if a := p.Available(); a != 1 {
+		t.Errorf("The pool available was %d but should be 1", a)
 	}
 
-	// mark as unhealty the available conn
-	c, err := p.Get(context.Background())
-	if err != nil {
-		t.Errorf("Get returned an error: %s", err.Error())
+	client.Close()
+
+	if client.Concurrency() != 0 {
+		t.Errorf("The connection is not tracking concurrency - got %d expected 0", client.Concurrency())
 	}
-	c.Unhealthy()
-	c.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
-	defer cancel()
+	if a := p.Available(); a != 1 {
+		t.Errorf("The pool available was %d but should be 1", a)
+	}
 
-	_, err = p.Get(ctx)
-	if err != context.DeadlineExceeded {
-		t.Errorf("Returned error was not context.DeadlineExceeded, but the context was timed out before the Get invocation")
+	client, _ = p.Get(context.Background())
+
+	if client.Concurrency() != 1 {
+		t.Errorf("The connection is not tracking concurrency - got %d expected 1", client.Concurrency())
+	}
+	client2, _ := p.Get(context.Background())
+
+	if client2.Concurrency() != 2 {
+		t.Errorf("The connection is not tracking concurrency - got %d expected 2", client2.Concurrency())
+	}
+
+	if client.Concurrency() != 2 {
+		t.Errorf("The connection is not tracking concurrency - got %d expected 2", client.Concurrency())
 	}
 }
