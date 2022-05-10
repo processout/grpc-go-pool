@@ -148,28 +148,24 @@ func (p *Pool) Close() {
 	p.unhealthyClients = nil
 	p.mu.Unlock()
 
-	if clients == nil {
-		return
-	}
-
-	close(clients)
-	for client := range clients {
-		if client.ClientConn == nil {
-			continue
+	if clients != nil {
+		close(clients)
+		for client := range clients {
+			if client.ClientConn == nil {
+				continue
+			}
+			client.ClientConn.Close()
 		}
-		client.ClientConn.Close()
 	}
 
-	if unhealthyClients == nil {
-		return
-	}
-
-	close(unhealthyClients)
-	for client := range unhealthyClients {
-		if client.ClientConn == nil {
-			continue
+	if unhealthyClients != nil {
+		close(unhealthyClients)
+		for client := range unhealthyClients {
+			if client.ClientConn == nil {
+				continue
+			}
+			client.ClientConn.Close()
 		}
-		client.ClientConn.Close()
 	}
 }
 
