@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -49,27 +50,21 @@ type ClientConn struct {
 	concurrency   *ConcurrencyCounter
 }
 
+// ConcurrencyCounter in an object is as easy way to reference the same counter from many ClientConn wrappers
 type ConcurrencyCounter struct {
-	concurrency int `default:0`
-	mu          sync.RWMutex
+	concurrency int32 `default:0`
 }
 
-func (c *ConcurrencyCounter) Get() int {
+func (c *ConcurrencyCounter) Get() int32 {
 	return c.concurrency
 }
 
 func (c *ConcurrencyCounter) Increment() {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	c.concurrency += 1
+	atomic.AddInt32(&c.concurrency, 1)
 }
 
 func (c *ConcurrencyCounter) Decrement() {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	c.concurrency -= 1
+	atomic.AddInt32(&c.concurrency, -1)
 }
 
 // New creates a new clients pool with the given initial and maximum capacity,
@@ -305,6 +300,6 @@ func (p *Pool) Available() int {
 	return len(p.clients)
 }
 
-func (c *ClientConn) Concurrency() int {
+func (c *ClientConn) Concurrency() int32 {
 	return c.concurrency.Get()
 }
