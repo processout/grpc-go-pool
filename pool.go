@@ -56,7 +56,7 @@ type ConcurrencyCounter struct {
 }
 
 func (c *ConcurrencyCounter) Get() int32 {
-	return c.concurrency
+	return atomic.LoadInt32(&c.concurrency)
 }
 
 func (c *ConcurrencyCounter) Increment() {
