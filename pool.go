@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -31,11 +32,12 @@ type FactoryWithContext func(context.Context) (*grpc.ClientConn, error)
 
 // Pool is the grpc client pool
 type Pool struct {
-	clients         chan ClientConn
-	factory         FactoryWithContext
-	idleTimeout     time.Duration
-	maxLifeDuration time.Duration
-	mu              sync.RWMutex
+	clients          chan ClientConn
+	unhealthyClients chan ClientConn
+	factory          FactoryWithContext
+	idleTimeout      time.Duration
+	maxLifeDuration  time.Duration
+	mu               sync.RWMutex
 }
 
 // ClientConn is the wrapper for a grpc client conn
@@ -45,6 +47,24 @@ type ClientConn struct {
 	timeUsed      time.Time
 	timeInitiated time.Time
 	unhealthy     bool
+	concurrency   *ConcurrencyCounter
+}
+
+// ConcurrencyCounter in an object is as easy way to reference the same counter from many ClientConn wrappers
+type ConcurrencyCounter struct {
+	concurrency int32 `default:0`
+}
+
+func (c *ConcurrencyCounter) Get() int32 {
+	return atomic.LoadInt32(&c.concurrency)
+}
+
+func (c *ConcurrencyCounter) Increment() {
+	atomic.AddInt32(&c.concurrency, 1)
+}
+
+func (c *ConcurrencyCounter) Decrement() {
+	atomic.AddInt32(&c.concurrency, -1)
 }
 
 // New creates a new clients pool with the given initial and maximum capacity,
@@ -73,9 +93,10 @@ func NewWithContext(ctx context.Context, factory FactoryWithContext, init, capac
 		init = capacity
 	}
 	p := &Pool{
-		clients:     make(chan ClientConn, capacity),
-		factory:     factory,
-		idleTimeout: idleTimeout,
+		clients:          make(chan ClientConn, capacity),
+		unhealthyClients: make(chan ClientConn, capacity),
+		factory:          factory,
+		idleTimeout:      idleTimeout,
 	}
 	if len(maxLifeDuration) > 0 {
 		p.maxLifeDuration = maxLifeDuration[0]
@@ -91,12 +112,14 @@ func NewWithContext(ctx context.Context, factory FactoryWithContext, init, capac
 			pool:          p,
 			timeUsed:      time.Now(),
 			timeInitiated: time.Now(),
+			concurrency:   &ConcurrencyCounter{},
 		}
 	}
 	// Fill the rest of the pool with empty clients
 	for i := 0; i < capacity-init; i++ {
 		p.clients <- ClientConn{
-			pool: p,
+			pool:        p,
+			concurrency: &ConcurrencyCounter{},
 		}
 	}
 	return p, nil
@@ -116,18 +139,28 @@ func (p *Pool) Close() {
 	p.mu.Lock()
 	clients := p.clients
 	p.clients = nil
+	unhealthyClients := p.unhealthyClients
+	p.unhealthyClients = nil
 	p.mu.Unlock()
 
-	if clients == nil {
-		return
+	if clients != nil {
+		close(clients)
+		for client := range clients {
+			if client.ClientConn == nil {
+				continue
+			}
+			client.ClientConn.Close()
+		}
 	}
 
-	close(clients)
-	for client := range clients {
-		if client.ClientConn == nil {
-			continue
+	if unhealthyClients != nil {
+		close(unhealthyClients)
+		for client := range unhealthyClients {
+			if client.ClientConn == nil {
+				continue
+			}
+			client.ClientConn.Close()
 		}
-		client.ClientConn.Close()
 	}
 }
 
@@ -147,7 +180,8 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 	}
 
 	wrapper := ClientConn{
-		pool: p,
+		pool:        p,
+		concurrency: &ConcurrencyCounter{},
 	}
 	select {
 	case wrapper = <-clients:
@@ -181,6 +215,15 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 		wrapper.timeInitiated = time.Now()
 	}
 
+	// Increase concurrency counter
+	if wrapper.ClientConn != nil {
+		wrapper.concurrency.Increment()
+	}
+	// And return to the pool if healthy (concurrency means we get to pull it many times!)
+	if !wrapper.unhealthy {
+		clients <- wrapper
+	}
+
 	return &wrapper, err
 }
 
@@ -196,12 +239,17 @@ func (c *ClientConn) Close() error {
 	if c == nil {
 		return nil
 	}
+
 	if c.ClientConn == nil {
 		return ErrAlreadyClosed
 	}
 	if c.pool.IsClosed() {
 		return ErrClosed
 	}
+
+	// decrement concurrency counter
+	c.concurrency.Decrement()
+
 	// If the wrapper connection has become too old, we want to recycle it. To
 	// clarify the logic: if the sum of the initialization time and the max
 	// duration is before Now(), it means the initialization is so old adding
@@ -216,21 +264,20 @@ func (c *ClientConn) Close() error {
 	// We're cloning the wrapper so we can set ClientConn to nil in the one
 	// used by the user
 	wrapper := ClientConn{
-		pool:       c.pool,
-		ClientConn: c.ClientConn,
-		timeUsed:   time.Now(),
+		pool:        c.pool,
+		ClientConn:  c.ClientConn,
+		timeUsed:    time.Now(),
+		concurrency: c.concurrency,
 	}
-	if c.unhealthy {
+	if c.unhealthy && c.concurrency.Get() == 0 {
 		wrapper.ClientConn.Close()
 		wrapper.ClientConn = nil
+	} else if c.unhealthy {
+		// if the connection is still in use, just add it to the
+		// unhealthy clients list, for later cleanup
+		c.pool.unhealthyClients <- wrapper
 	} else {
 		wrapper.timeInitiated = c.timeInitiated
-	}
-	select {
-	case c.pool.clients <- wrapper:
-		// All good
-	default:
-		return ErrFullPool
 	}
 
 	c.ClientConn = nil // Mark as closed
@@ -251,4 +298,8 @@ func (p *Pool) Available() int {
 		return 0
 	}
 	return len(p.clients)
+}
+
+func (c *ClientConn) Concurrency() int32 {
+	return c.concurrency.Get()
 }
