@@ -1,4 +1,4 @@
-module grpcpool
+module multiplexing_grpc_go_pool
 
 go 1.18
 

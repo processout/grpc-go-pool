@@ -1,5 +1,5 @@
 // Package grpcpool provides a pool of grpc clients
-package grpcpool
+package multiplexing_grpc_go_pool
 
 import (
 	"context"

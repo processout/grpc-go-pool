@@ -1,4 +1,4 @@
-package grpcpool
+package multiplexing_grpc_go_pool
 
 import (
 	"context"
