@@ -240,7 +240,7 @@ func (c *ClientConn) Close() error {
 // Capacity returns the capacity
 func (p *Pool) Capacity() int {
 	p.mu.RLock()
-	defer p.mu.Unlock()
+	defer p.mu.RUnlock()
 
 	if p.IsClosed() {
 		return 0
@@ -251,7 +251,7 @@ func (p *Pool) Capacity() int {
 // Available returns the number of currently unused clients
 func (p *Pool) Available() int {
 	p.mu.RLock()
-	defer p.mu.Unlock()
+	defer p.mu.RUnlock()
 
 	if p.IsClosed() {
 		return 0
