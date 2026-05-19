@@ -7,11 +7,12 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func TestNew(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.Dial("example.com", grpc.WithInsecure())
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}, 1, 3, 0)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -95,7 +96,7 @@ func TestNew(t *testing.T) {
 
 func TestTimeout(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.Dial("example.com", grpc.WithInsecure())
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}, 1, 1, 0)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -112,7 +113,8 @@ func TestTimeout(t *testing.T) {
 	// We want to fetch a second one, with a timeout. If the timeout was
 	// ommitted, the pool would wait indefinitely as it'd wait for another
 	// client to get back into the queue
-	ctx, _ := context.WithDeadline(context.Background(), time.Now().Add(10*time.Millisecond))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Millisecond))
+	defer cancel()
 	_, err2 := p.Get(ctx)
 	if err2 != ErrTimeout {
 		t.Errorf("Expected error \"%s\" but got \"%s\"", ErrTimeout, err2.Error())
@@ -121,7 +123,7 @@ func TestTimeout(t *testing.T) {
 
 func TestMaxLifeDuration(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.Dial("example.com", grpc.WithInsecure())
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}, 1, 1, 0, 1)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -145,7 +147,7 @@ func TestMaxLifeDuration(t *testing.T) {
 	count := 0
 	p, err = New(func() (*grpc.ClientConn, error) {
 		count++
-		return grpc.Dial("example.com", grpc.WithInsecure())
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}, 1, 1, 0, time.Minute)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -176,7 +178,7 @@ func TestMaxLifeDuration(t *testing.T) {
 
 func TestPoolClose(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.Dial("example.com", grpc.WithInsecure())
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}, 1, 1, 0)
 	if err != nil {
 		t.Errorf("The pool returned an error: %s", err.Error())
@@ -210,7 +212,7 @@ func TestContextCancelation(t *testing.T) {
 			return nil, ctx.Err()
 
 		default:
-			return grpc.Dial("example.com", grpc.WithInsecure())
+			return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
 		}
 
 	}, 1, 1, 0)
@@ -230,7 +232,7 @@ func TestContextTimeout(t *testing.T) {
 
 		// wait for the deadline to pass
 		case <-time.After(time.Millisecond):
-			return grpc.Dial("example.com", grpc.WithInsecure())
+			return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
 		}
 
 	}, 1, 1, 0)
@@ -242,7 +244,7 @@ func TestContextTimeout(t *testing.T) {
 
 func TestGetContextTimeout(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.Dial("example.com", grpc.WithInsecure())
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}, 1, 1, 0)
 
 	if err != nil {
@@ -271,7 +273,7 @@ func TestGetContextFactoryTimeout(t *testing.T) {
 
 		// wait for the deadline to pass
 		case <-time.After(time.Millisecond):
-			return grpc.Dial("example.com", grpc.WithInsecure())
+			return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
 		}
 
 	}, 1, 1, 0)
