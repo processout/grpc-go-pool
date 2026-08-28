@@ -1,4 +1,4 @@
-module github.com/processout/grpc-go-pool
+module github.com/fishfinal/grpc-go-pool
 
 go 1.26.3
 

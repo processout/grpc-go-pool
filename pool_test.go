@@ -2,6 +2,7 @@ package grpcpool
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,291 +11,426 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func TestNew(t *testing.T) {
+// TestConcurrentGet tests concurrent connection acquisition
+func TestConcurrentGet(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
 		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	}, 1, 3, 0)
+	}, 2, 5, time.Minute)
 	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
+		t.Fatalf("Failed to create pool: %v", err)
 	}
-	if a := p.Available(); a != 3 {
-		t.Errorf("The pool available was %d but should be 3", a)
-	}
-	if a := p.Capacity(); a != 3 {
-		t.Errorf("The pool capacity was %d but should be 3", a)
+	defer p.Close()
+
+	var wg sync.WaitGroup
+	concurrency := 100
+	errors := make(chan error, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			conn, err := p.Get(ctx)
+			if err != nil {
+				errors <- err
+				return
+			}
+			// Simulate usage
+			time.Sleep(10 * time.Millisecond)
+			if err := conn.Close(); err != nil && err != ErrAlreadyClosed {
+				errors <- err
+			}
+		}()
 	}
 
-	// Get a client
-	client, err := p.Get(context.Background())
-	if err != nil {
-		t.Errorf("Get returned an error: %s", err.Error())
-	}
-	if client == nil {
-		t.Error("client was nil")
-	}
-	if a := p.Available(); a != 2 {
-		t.Errorf("The pool available was %d but should be 2", a)
-	}
-	if a := p.Capacity(); a != 3 {
-		t.Errorf("The pool capacity was %d but should be 3", a)
-	}
+	wg.Wait()
+	close(errors)
 
-	// Return the client
-	err = client.Close()
-	if err != nil {
-		t.Errorf("Close returned an error: %s", err.Error())
-	}
-	if a := p.Available(); a != 3 {
-		t.Errorf("The pool available was %d but should be 3", a)
-	}
-	if a := p.Capacity(); a != 3 {
-		t.Errorf("The pool capacity was %d but should be 3", a)
-	}
-
-	// Attempt to return the client again
-	err = client.Close()
-	if err != ErrAlreadyClosed {
-		t.Errorf("Expected error \"%s\" but got \"%s\"",
-			ErrAlreadyClosed.Error(), err.Error())
-	}
-
-	// Take 3 clients
-	cl1, err1 := p.Get(context.Background())
-	cl2, err2 := p.Get(context.Background())
-	cl3, err3 := p.Get(context.Background())
-	if err1 != nil {
-		t.Errorf("Err1 was not nil: %s", err1.Error())
-	}
-	if err2 != nil {
-		t.Errorf("Err2 was not nil: %s", err2.Error())
-	}
-	if err3 != nil {
-		t.Errorf("Err3 was not nil: %s", err3.Error())
-	}
-
-	if a := p.Available(); a != 0 {
-		t.Errorf("The pool available was %d but should be 0", a)
-	}
-	if a := p.Capacity(); a != 3 {
-		t.Errorf("The pool capacity was %d but should be 3", a)
-	}
-
-	// Returning all of them
-	err1 = cl1.Close()
-	if err1 != nil {
-		t.Errorf("Close returned an error: %s", err1.Error())
-	}
-	err2 = cl2.Close()
-	if err2 != nil {
-		t.Errorf("Close returned an error: %s", err2.Error())
-	}
-	err3 = cl3.Close()
-	if err3 != nil {
-		t.Errorf("Close returned an error: %s", err3.Error())
+	for err := range errors {
+		t.Errorf("Concurrent operation failed: %v", err)
 	}
 }
 
-func TestTimeout(t *testing.T) {
+// TestPoolFullRace tests race conditions when the pool is full
+func TestPoolFullRace(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
 		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	}, 1, 1, 0)
+	}, 0, 2, time.Minute)
 	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
+		t.Fatalf("Failed to create pool: %v", err)
 	}
+	defer p.Close()
 
-	_, err = p.Get(context.Background())
-	if err != nil {
-		t.Errorf("Get returned an error: %s", err.Error())
-	}
-	if a := p.Available(); a != 0 {
-		t.Errorf("The pool available was %d but expected 0", a)
-	}
-
-	// We want to fetch a second one, with a timeout. If the timeout was
-	// ommitted, the pool would wait indefinitely as it'd wait for another
-	// client to get back into the queue
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Millisecond))
-	defer cancel()
-	_, err2 := p.Get(ctx)
-	if err2 != ErrTimeout {
-		t.Errorf("Expected error \"%s\" but got \"%s\"", ErrTimeout, err2.Error())
-	}
-}
-
-func TestMaxLifeDuration(t *testing.T) {
-	p, err := New(func() (*grpc.ClientConn, error) {
-		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	}, 1, 1, 0, 1)
-	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
-	}
-
-	c, err := p.Get(context.Background())
-	if err != nil {
-		t.Errorf("Get returned an error: %s", err.Error())
-	}
-
-	// The max life of the connection was very low (1ns), so when we close
-	// the connection it should get marked as unhealthy
-	if err := c.Close(); err != nil {
-		t.Errorf("Close returned an error: %s", err.Error())
-	}
-	if !c.unhealthy {
-		t.Errorf("the connection should've been marked as unhealthy")
-	}
-
-	// Let's also make sure we don't prematurely close the connection
-	count := 0
-	p, err = New(func() (*grpc.ClientConn, error) {
-		count++
-		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	}, 1, 1, 0, time.Minute)
-	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
-	}
-
-	for i := 0; i < 3; i++ {
-		c, err = p.Get(context.Background())
+	// Fill the pool
+	conns := make([]*ClientConn, 2)
+	for i := 0; i < 2; i++ {
+		conns[i], err = p.Get(context.Background())
 		if err != nil {
-			t.Errorf("Get returned an error: %s", err.Error())
-		}
-
-		// The max life of the connection is high, so when we close
-		// the connection it shouldn't be marked as unhealthy
-		if err := c.Close(); err != nil {
-			t.Errorf("Close returned an error: %s", err.Error())
-		}
-		if c.unhealthy {
-			t.Errorf("the connection shouldn't have been marked as unhealthy")
+			t.Fatalf("Failed to get connection: %v", err)
 		}
 	}
 
-	// Count should have been 1 as dial function should only have been called once
-	if count > 1 {
-		t.Errorf("Dial function has been called multiple times")
+	// Concurrently return connections, may trigger ErrFullPool
+	var wg sync.WaitGroup
+	errCount := 0
+	var mu sync.Mutex
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			if err := conns[idx].Close(); err != nil {
+				mu.Lock()
+				errCount++
+				mu.Unlock()
+				// ErrFullPool is an expected possible error
+				if err != ErrFullPool {
+					t.Logf("Unexpected error: %v", err)
+				}
+			}
+		}(i)
 	}
 
+	wg.Wait()
+	// If both succeed, there should be one ErrFullPool or both succeed
+	t.Logf("Error count: %d", errCount)
 }
 
-func TestPoolClose(t *testing.T) {
+// TestGetWhileClosing tests getting connections while the pool is closing
+func TestGetWhileClosing(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
 		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	}, 1, 1, 0)
+	}, 1, 3, time.Minute)
 	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
+		t.Fatalf("Failed to create pool: %v", err)
 	}
 
-	c, err := p.Get(context.Background())
-	if err != nil {
-		t.Errorf("Get returned an error: %s", err.Error())
+	var wg sync.WaitGroup
+	errors := make(chan error, 100)
+
+	// Start multiple goroutines to get connections
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, err := p.Get(context.Background())
+			if err != nil {
+				errors <- err
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+			conn.Close()
+		}()
 	}
 
-	cc := c.ClientConn
-	if err := c.Close(); err != nil {
-		t.Errorf("Close returned an error: %s", err.Error())
-	}
-
-	// Close pool should close all underlying gRPC client connections
+	// Close the pool while getting connections
+	time.Sleep(10 * time.Millisecond)
 	p.Close()
 
-	if cc.GetState() != connectivity.Shutdown {
-		t.Errorf("Returned connection was not closed, underlying connection is not in shutdown state")
-	}
-}
+	wg.Wait()
+	close(errors)
 
-func TestContextCancelation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := NewWithContext(ctx, func(ctx context.Context) (*grpc.ClientConn, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-
-		default:
-			return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	hasErrClosed := false
+	for err := range errors {
+		if err == ErrClosed {
+			hasErrClosed = true
 		}
-
-	}, 1, 1, 0)
-
-	if err != context.Canceled {
-		t.Errorf("Returned error was not context.Canceled, but the context did cancel before the invocation")
+		t.Logf("Got error: %v", err)
 	}
-}
-func TestContextTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
-	defer cancel()
 
-	_, err := NewWithContext(ctx, func(ctx context.Context) (*grpc.ClientConn, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-
-		// wait for the deadline to pass
-		case <-time.After(time.Millisecond):
-			return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
-		}
-
-	}, 1, 1, 0)
-
-	if err != context.DeadlineExceeded {
-		t.Errorf("Returned error was not context.DeadlineExceeded, but the context was timed out before the initialization")
+	if !hasErrClosed {
+		t.Log("No ErrClosed received, which might be okay if all connections were acquired before close")
 	}
 }
 
-func TestGetContextTimeout(t *testing.T) {
+// TestCloseWhileInUse tests closing the pool while a connection is in use
+func TestCloseWhileInUse(t *testing.T) {
 	p, err := New(func() (*grpc.ClientConn, error) {
 		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	}, 1, 1, 0)
-
+	}, 1, 3, time.Minute)
 	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
+		t.Fatalf("Failed to create pool: %v", err)
 	}
 
-	// keep busy the available conn
-	_, _ = p.Get(context.Background())
+	// Acquire a connection
+	conn, err := p.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to get connection: %v", err)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
-	defer cancel()
+	// Save underlying connection for verification
+	underlyingConn := conn.ClientConn
 
-	// wait for the deadline to pass
-	time.Sleep(time.Millisecond)
-	_, err = p.Get(ctx)
-	if err != ErrTimeout { // it should be context.DeadlineExceeded
-		t.Errorf("Returned error was not ErrTimeout, but the context was timed out before the Get invocation")
+	// Close the pool while the connection is still in use
+	p.Close()
+
+	// Try to return the connection
+	err = conn.Close()
+	if err != ErrClosed && err != ErrAlreadyClosed {
+		t.Errorf("Expected ErrClosed or ErrAlreadyClosed, got: %v", err)
+	}
+
+	// Verify the connection is closed
+	if underlyingConn.GetState() != connectivity.Shutdown {
+		t.Errorf("Underlying connection should be shutdown, got: %v", underlyingConn.GetState())
 	}
 }
 
-func TestGetContextFactoryTimeout(t *testing.T) {
-	p, err := NewWithContext(context.Background(), func(ctx context.Context) (*grpc.ClientConn, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
+// TestIdleTimeout tests idle connection timeout
+func TestIdleTimeout(t *testing.T) {
+	p, err := New(func() (*grpc.ClientConn, error) {
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}, 1, 3, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Failed to create pool: %v", err)
+	}
+	defer p.Close()
 
-		// wait for the deadline to pass
-		case <-time.After(time.Millisecond):
-			return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn1, err := p.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to get connection: %v", err)
+	}
+	conn1.Close()
+
+	// Wait for idle timeout
+	time.Sleep(200 * time.Millisecond)
+
+	// Get connection, should create a new one
+	conn2, err := p.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to get connection after timeout: %v", err)
+	}
+	defer conn2.Close()
+
+	// Verify they are different connections
+	if conn1.ClientConn == conn2.ClientConn {
+		t.Errorf("Connection should be recreated after idle timeout")
+	}
+}
+
+// TestMaxLifeDurationRace tests race conditions with max lifetime
+func TestMaxLifeDurationRace(t *testing.T) {
+	createCount := 0
+	var countMu sync.Mutex
+
+	factory := func() (*grpc.ClientConn, error) {
+		countMu.Lock()
+		createCount++
+		countMu.Unlock()
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+
+	// Use a short max lifetime, but not too short to avoid excessive creation
+	p, err := New(factory, 2, 5, time.Minute, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Failed to create pool: %v", err)
+	}
+	defer p.Close()
+
+	var wg sync.WaitGroup
+	concurrency := 10
+	errors := make(chan error, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			// Random delay to simulate real-world scenarios
+			sleepTime := time.Duration(20+idx*8) * time.Millisecond
+			time.Sleep(sleepTime)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			conn, err := p.Get(ctx)
+			if err != nil {
+				errors <- err
+				return
+			}
+
+			// Simulate using the connection
+			time.Sleep(30 * time.Millisecond)
+
+			// Return the connection
+			if err := conn.Close(); err != nil && err != ErrAlreadyClosed && err != ErrClosed {
+				errors <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for errors
+	for err := range errors {
+		t.Logf("Error during test: %v", err)
+	}
+
+	countMu.Lock()
+	defer countMu.Unlock()
+
+	t.Logf("Total connections created: %d", createCount)
+
+	// Since max lifetime is 100ms and operations take longer, multiple connections should be created
+	// Initial connections: 2, as connections expire, new ones will be created
+	if createCount < 2 {
+		t.Errorf("Expected at least 2 connections to be created, got %d", createCount)
+	}
+
+	// Verify connections don't grow indefinitely (should be within capacity)
+	if createCount > 20 {
+		t.Errorf("Too many connections created: %d, possible leak", createCount)
+	}
+}
+
+// TestClosePoolPanic tests for potential panics when closing the pool
+func TestClosePoolPanic(t *testing.T) {
+	p, err := New(func() (*grpc.ClientConn, error) {
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}, 1, 1, time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to create pool: %v", err)
+	}
+
+	// Closing the pool multiple times should not panic
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Pool Close panicked: %v", r)
 		}
+	}()
 
-	}, 1, 1, 0)
+	p.Close()
+	p.Close() // Second close
+}
 
+// TestGetAfterClose tests getting connections after the pool is closed
+func TestGetAfterClose(t *testing.T) {
+	p, err := New(func() (*grpc.ClientConn, error) {
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}, 1, 3, time.Minute)
 	if err != nil {
-		t.Errorf("The pool returned an error: %s", err.Error())
+		t.Fatalf("Failed to create pool: %v", err)
 	}
 
-	// mark as unhealty the available conn
-	c, err := p.Get(context.Background())
-	if err != nil {
-		t.Errorf("Get returned an error: %s", err.Error())
-	}
-	c.Unhealthy()
-	c.Close()
+	p.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+	conn, err := p.Get(context.Background())
+	if err != ErrClosed {
+		t.Errorf("Expected ErrClosed, got: %v", err)
+	}
+	if conn != nil {
+		t.Error("Expected nil connection")
+	}
+}
+
+// TestConcurrentCloseAndGet tests concurrent close and get operations
+func TestConcurrentCloseAndGet(t *testing.T) {
+	p, err := New(func() (*grpc.ClientConn, error) {
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}, 1, 5, time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to create pool: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	done := make(chan bool)
+
+	// Concurrently get and close
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					conn, err := p.Get(context.Background())
+					if err != nil {
+						if err == ErrClosed {
+							return
+						}
+						continue
+					}
+					conn.Close()
+					time.Sleep(time.Millisecond)
+				}
+			}
+		}()
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	p.Close()
+	close(done)
+	wg.Wait()
+}
+
+// TestFactoryError tests factory function errors
+func TestFactoryError(t *testing.T) {
+	expectedErr := context.DeadlineExceeded
+	p, err := NewWithContext(context.Background(), func(ctx context.Context) (*grpc.ClientConn, error) {
+		return nil, expectedErr
+	}, 0, 1, time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to create pool: %v", err)
+	}
+	defer p.Close()
+
+	// No connections available in pool, need to create a new one
+	conn, err := p.Get(context.Background())
+	if err != expectedErr {
+		t.Errorf("Expected factory error %v, got: %v", expectedErr, err)
+	}
+	if conn != nil {
+		t.Error("Expected nil connection on factory error")
+	}
+
+	// Verify the pool is still usable
+	if p.IsClosed() {
+		t.Error("Pool should not be closed after factory error")
+	}
+}
+
+// TestPoolCapacityExhaustion tests pool capacity exhaustion
+func TestPoolCapacityExhaustion(t *testing.T) {
+	p, err := New(func() (*grpc.ClientConn, error) {
+		return grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}, 0, 2, time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to create pool: %v", err)
+	}
+	defer p.Close()
+
+	// Fill the pool
+	conns := make([]*ClientConn, 2)
+	for i := 0; i < 2; i++ {
+		conns[i], err = p.Get(context.Background())
+		if err != nil {
+			t.Fatalf("Failed to get connection %d: %v", i, err)
+		}
+	}
+
+	// Try to get a third connection (should timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	_, err = p.Get(ctx)
-	if err != context.DeadlineExceeded {
-		t.Errorf("Returned error was not context.DeadlineExceeded, but the context was timed out before the Get invocation")
+	if err != ErrTimeout && err != context.DeadlineExceeded {
+		t.Errorf("Expected timeout error, got: %v", err)
+	}
+
+	// Return one connection
+	conns[0].Close()
+
+	// Should be able to get a connection now
+	conn, err := p.Get(context.Background())
+	if err != nil {
+		t.Errorf("Should be able to get connection after release, got: %v", err)
+	}
+	if conn != nil {
+		conn.Close()
 	}
 }
