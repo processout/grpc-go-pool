@@ -1,0 +1,3 @@
+This project includes modifications made by fishfinal.
+Original work: Copyright (c) 2017 ProcessOut
+Modifications: Copyright (c) 2026 fishfinal

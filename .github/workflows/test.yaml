@@ -1,0 +1,33 @@
+name: test
+
+on:
+  push:
+    branches: [ "master", "feature/*", "refactor/*", "perf/*" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GENERAL_RUNNING_MODE: workflow
+      ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Configure Git with access token
+        run: git config --global url.https://$ACCESS_TOKEN@github.com/.insteadOf https://github.com/
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Static code analysis
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 -v ./...

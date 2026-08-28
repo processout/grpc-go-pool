@@ -36,6 +36,9 @@ type Pool struct {
 	idleTimeout     time.Duration
 	maxLifeDuration time.Duration
 	mu              sync.RWMutex
+	closed          bool           // 新增：明确标记池是否已关闭
+	closeMu         sync.Mutex     // 新增：保护关闭操作
+	wg              sync.WaitGroup // 新增：追踪正在使用的连接
 }
 
 // ClientConn is the wrapper for a grpc client conn
@@ -45,6 +48,8 @@ type ClientConn struct {
 	timeUsed      time.Time
 	timeInitiated time.Time
 	unhealthy     bool
+	closed        bool       // 新增：标记连接是否已关闭
+	mu            sync.Mutex // 新增：保护连接状态
 }
 
 // New creates a new clients pool with the given initial and maximum capacity,
@@ -76,6 +81,7 @@ func NewWithContext(ctx context.Context, factory FactoryWithContext, init, capac
 		clients:     make(chan ClientConn, capacity),
 		factory:     factory,
 		idleTimeout: idleTimeout,
+		closed:      false,
 	}
 	if len(maxLifeDuration) > 0 {
 		p.maxLifeDuration = maxLifeDuration[0]
@@ -113,13 +119,35 @@ func (p *Pool) getClients() chan ClientConn {
 // You can call Close while there are outstanding clients.
 // The pool channel is then closed, and Get will not be allowed anymore
 func (p *Pool) Close() {
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
+
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.closed = true
 	clients := p.clients
 	p.clients = nil
 	p.mu.Unlock()
 
 	if clients == nil {
 		return
+	}
+
+	// 等待所有正在使用的连接归还，最多等待5秒
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// 所有连接都已归还
+	case <-time.After(5 * time.Second):
+		// 超时，强制关闭
 	}
 
 	close(clients)
@@ -133,7 +161,12 @@ func (p *Pool) Close() {
 
 // IsClosed returns true if the client pool is closed.
 func (p *Pool) IsClosed() bool {
-	return p == nil || p.getClients() == nil
+	if p == nil {
+		return true
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.closed
 }
 
 // Get will return the next available client. If capacity
@@ -141,6 +174,11 @@ func (p *Pool) IsClosed() bool {
 // it will wait till the next client becomes available or a timeout.
 // A timeout of 0 is an indefinite wait
 func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
+	// 先检查池是否已关闭
+	if p.IsClosed() {
+		return nil, ErrClosed
+	}
+
 	clients := p.getClients()
 	if clients == nil {
 		return nil, ErrClosed
@@ -156,6 +194,11 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 		return nil, ErrTimeout // it would better returns ctx.Err()
 	}
 
+	// 如果获取到的连接是空连接且池已关闭，返回错误
+	if wrapper.ClientConn == nil && p.IsClosed() {
+		return nil, ErrClosed
+	}
+
 	// If the wrapper was idle too long, close the connection and create a new
 	// one. It's safe to assume that there isn't any newer client as the client
 	// we fetched is the first in the channel
@@ -169,24 +212,38 @@ func (p *Pool) Get(ctx context.Context) (*ClientConn, error) {
 
 	var err error
 	if wrapper.ClientConn == nil {
+		// 再次检查池是否已关闭
+		if p.IsClosed() {
+			return nil, ErrClosed
+		}
+
 		wrapper.ClientConn, err = p.factory(ctx)
 		if err != nil {
 			// If there was an error, we want to put back a placeholder
 			// client in the channel
-			clients <- ClientConn{
+			select {
+			case clients <- ClientConn{
 				pool: p,
+			}:
+			default:
+				// 如果无法放回，说明池已满或已关闭
 			}
+			return nil, err
 		}
 		// This is a new connection, reset its initiated time
 		wrapper.timeInitiated = time.Now()
 	}
 
+	// 标记连接正在使用
+	p.wg.Add(1)
 	return &wrapper, err
 }
 
 // Unhealthy marks the client conn as unhealthy, so that the connection
 // gets reset when closed
 func (c *ClientConn) Unhealthy() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.unhealthy = true
 }
 
@@ -196,12 +253,41 @@ func (c *ClientConn) Close() error {
 	if c == nil {
 		return nil
 	}
-	if c.ClientConn == nil {
+
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
 		return ErrAlreadyClosed
 	}
+	c.mu.Unlock()
+
+	// 确保 wg.Done 被调用
+	defer func() {
+		if c.pool != nil {
+			c.pool.wg.Done()
+		}
+	}()
+
+	if c.ClientConn == nil {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+		return ErrAlreadyClosed
+	}
+
+	// 检查池是否已关闭
 	if c.pool.IsClosed() {
+		// 池已关闭，直接关闭底层连接
+		if c.ClientConn != nil {
+			c.ClientConn.Close()
+			c.ClientConn = nil
+		}
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
 		return ErrClosed
 	}
+
 	// If the wrapper connection has become too old, we want to recycle it. To
 	// clarify the logic: if the sum of the initialization time and the max
 	// duration is before Now(), it means the initialization is so old adding
@@ -220,20 +306,41 @@ func (c *ClientConn) Close() error {
 		ClientConn: c.ClientConn,
 		timeUsed:   time.Now(),
 	}
+
+	c.mu.Lock()
 	if c.unhealthy {
 		wrapper.ClientConn.Close()
 		wrapper.ClientConn = nil
 	} else {
 		wrapper.timeInitiated = c.timeInitiated
 	}
+	c.mu.Unlock()
+
+	// 如果连接被标记为不健康，不需要归还
+	if wrapper.ClientConn == nil {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+		return nil
+	}
+
+	// 尝试归还连接到池
 	select {
 	case c.pool.clients <- wrapper:
 		// All good
 	default:
+		// 池已满，关闭连接
+		wrapper.ClientConn.Close()
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
 		return ErrFullPool
 	}
 
+	c.mu.Lock()
 	c.ClientConn = nil // Mark as closed
+	c.closed = true
+	c.mu.Unlock()
 	return nil
 }
 
