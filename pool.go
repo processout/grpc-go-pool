@@ -83,6 +83,7 @@ func NewWithContext(ctx context.Context, factory FactoryWithContext, init, capac
 	for i := 0; i < init; i++ {
 		c, err := factory(ctx)
 		if err != nil {
+			p.Close()
 			return nil, err
 		}
 
