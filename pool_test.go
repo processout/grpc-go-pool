@@ -2,6 +2,8 @@ package grpcpool
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -91,6 +93,68 @@ func TestNew(t *testing.T) {
 	err3 = cl3.Close()
 	if err3 != nil {
 		t.Errorf("Close returned an error: %s", err3.Error())
+	}
+}
+
+func TestNewFactoryErrorClosesConnections(t *testing.T) {
+	constructors := []struct {
+		name string
+		new  func(FactoryWithContext, int) (*Pool, error)
+	}{
+		{
+			name: "New",
+			new: func(factory FactoryWithContext, init int) (*Pool, error) {
+				return New(func() (*grpc.ClientConn, error) {
+					return factory(context.Background())
+				}, init, 4, 0)
+			},
+		},
+		{
+			name: "NewWithContext",
+			new: func(factory FactoryWithContext, init int) (*Pool, error) {
+				return NewWithContext(context.Background(), factory, init, 4, 0)
+			},
+		},
+	}
+
+	for _, constructor := range constructors {
+		for _, successful := range []int{0, 1, 2} {
+			t.Run(fmt.Sprintf("%s/after%d", constructor.name, successful), func(t *testing.T) {
+				factoryErr := errors.New("factory failed")
+				var connections []*grpc.ClientConn
+				calls := 0
+				factory := func(context.Context) (*grpc.ClientConn, error) {
+					calls++
+					if len(connections) == successful {
+						return nil, factoryErr
+					}
+					conn, err := grpc.NewClient("example.com", grpc.WithTransportCredentials(insecure.NewCredentials()))
+					if err != nil {
+						t.Fatal(err)
+					}
+					connections = append(connections, conn)
+					t.Cleanup(func() { conn.Close() })
+					return conn, nil
+				}
+
+				pool, err := constructor.new(factory, 4)
+				if pool != nil {
+					t.Cleanup(pool.Close)
+					t.Error("expected a nil pool after factory failure")
+				}
+				if err != factoryErr {
+					t.Errorf("expected the original factory error, got %v", err)
+				}
+				if calls != successful+1 {
+					t.Errorf("expected %d factory calls, got %d", successful+1, calls)
+				}
+				for i, conn := range connections {
+					if state := conn.GetState(); state != connectivity.Shutdown {
+						t.Errorf("connection %d state = %s, want Shutdown", i, state)
+					}
+				}
+			})
+		}
 	}
 }
 
